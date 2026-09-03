@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Annotated
 
 from typer import Argument, BadParameter, Option, Typer
 
+from ..common import configure_logging
 from .compare import (
     RunLoadError,
     compare,
@@ -52,8 +52,7 @@ def run(
             "duckdb is required for `cosgp benchmark run`; "
             "install with `pip install cosgp[benchmark]` (or `uv sync --extra benchmark`)"
         ) from e
-    if not progress:
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging(progress)
     out_dir.mkdir(parents=True, exist_ok=True)
     run_file = BenchmarkRunner(repeats=repeats, progress=progress).run(
         name, path, out_dir
