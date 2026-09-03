@@ -11,7 +11,16 @@ Install dependencies and run the `cosgp` CLI via [uv](https://docs.astral.sh/uv/
 
 ```sh
 uv sync
-uv run cosgp INFILE DATETIME OUTDIR
+```
+
+`cosgp` has three subcommands: `convert` (aliased `create`), `info`, and `benchmark`.
+
+### `cosgp convert` / `cosgp create`
+
+Re-writes existing stac-geoparquet into cloud-optimized stac-geoparquet:
+
+```sh
+uv run cosgp convert INFILE DATETIME OUTDIR
 ```
 
 - `INFILE`: a stac-geoparquet file, or a directory of `.parquet` files
@@ -21,7 +30,7 @@ uv run cosgp INFILE DATETIME OUTDIR
 For example:
 
 ```sh
-uv run cosgp items.parquet 2024 optimized/
+uv run cosgp convert items.parquet 2024 optimized/
 ```
 
 Some useful options:
@@ -31,7 +40,28 @@ Some useful options:
 - `--bucket-size BYTES`: target size per output file (default 2 GB uncompressed)
 - `--no-progress`: log progress instead of showing a progress bar
 
-Run `uv run cosgp --help` for the full list of options.
+Run `uv run cosgp convert --help` for the full list of options. `cosgp create` is an alias for the same command.
+
+### `cosgp info`
+
+Prints info about one or more stac-geoparquet files, including whether each is actually cloud-optimized (has stac-hash columns and is sorted by hash):
+
+```sh
+uv run cosgp info optimized/
+uv run cosgp info optimized/*.parquet --json
+```
+
+### `cosgp benchmark`
+
+Runs a fixed suite of DuckDB queries against one or more stac-geoparquet datasets and compares timings between runs. Requires the `benchmark` extra:
+
+```sh
+uv sync --extra benchmark
+uv run cosgp benchmark run my-dataset "optimized/*.parquet"
+uv run cosgp benchmark compare benchmark-results/run-a-* benchmark-results/run-b-*
+```
+
+`path` is passed straight to DuckDB's `read_parquet`, so it can be a local glob or a remote (e.g. `s3://`) URI. See [docs/benchmarks.md](docs/benchmarks.md) for the separate DuckDB notebook used for deeper cross-layout comparisons.
 
 ## Benchmarks
 
