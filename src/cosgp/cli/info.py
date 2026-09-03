@@ -36,7 +36,9 @@ def file_info(path: Path) -> FileInfo:
     has_hash_columns = all(name in schema.names for name in REQUIRED_HASH_COLUMNS)
     sorted_by_hash = False
     if has_hash_columns:
-        hashes = parquet_file.read(columns=["hash:hash"]).column("hash:hash").to_pylist()
+        hashes = (
+            parquet_file.read(columns=["hash:hash"]).column("hash:hash").to_pylist()
+        )
         sorted_by_hash = hashes == sorted(hashes)
 
     prefixed_id = False
