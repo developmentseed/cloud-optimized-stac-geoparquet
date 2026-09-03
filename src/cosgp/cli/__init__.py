@@ -9,6 +9,5 @@ from .info import info
 app = Typer()
 
 app.command()(convert)
-app.command(name="create")(convert)
 app.command()(info)
 app.add_typer(benchmark_app, name="benchmark")
