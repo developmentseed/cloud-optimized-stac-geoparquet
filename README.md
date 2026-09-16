@@ -61,17 +61,14 @@ uv run cosgp benchmark run my-dataset "optimized/*.parquet"
 uv run cosgp benchmark compare benchmark-results/run-a-* benchmark-results/run-b-*
 ```
 
-`path` is passed straight to DuckDB's `read_parquet`, so it can be a local glob or a remote (e.g. `s3://`) URI. See [docs/benchmarks.md](docs/benchmarks.md) for the separate DuckDB notebook used for deeper cross-layout comparisons.
+`path` is passed straight to DuckDB's `read_parquet`, so it can be a local glob or a remote (e.g. `s3://`) URI. See [notebooks/duckdb-geoparquet-benchmarks.ipynb](notebooks/duckdb-geoparquet-benchmarks.ipynb) for a deeper cross-layout comparison against files retrieved from the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/).
 
 ## Benchmarks
 
-We've done some benchmarking against files retrieved from the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/).
-To see the results, check out [notebooks/duckdb-geoparquet-benchmarks.ipynb](notebooks/duckdb-geoparquet-benchmarks.ipynb).
-Since they involve many remote queries the benchmarks take a while to run, but if you'd like to run them yourself:
+The notebook syncs its own sample data and generates hash-sorted variants with `cosgp convert`, so it takes a while to run the first time:
 
 ```sh
-scripts/sync-benchmark-data.sh
-uv sync --group notebooks
+uv sync --extra benchmark --group notebooks
 uv run --group notebooks jupyter lab notebooks/duckdb-geoparquet-benchmarks.ipynb
 ```
 
