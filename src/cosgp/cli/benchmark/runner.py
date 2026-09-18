@@ -35,6 +35,7 @@ SELECT
     quantile_cont(bbox.ymin, 0.25) AS miny,
     quantile_cont(bbox.ymax, 0.75) AS maxy,
     quantile_cont("eo:cloud_cover", 0.5) AS max_cloud_cover,
+    any_value(collection) AS collection,
     any_value(id) AS id
 FROM read_parquet({parquet_glob})
 """
@@ -64,17 +65,19 @@ class BenchmarkRunner:
         else:
             logger.info("resolving parameters for %s", dataset_path)
         try:
+            columns = self.dataset_columns(dataset_path)
             params = self.resolve_params(dataset_path)
+            queries = runnable_queries(QUERIES, columns, params)
 
             task: TaskID | None = None
             if self.progress:
                 task = self.progress.add_task(
-                    f"benchmarking {len(QUERIES)} queries", total=len(QUERIES)
+                    f"benchmarking {len(queries)} queries", total=len(queries)
                 )
             else:
-                logger.info("benchmarking %d queries", len(QUERIES))
+                logger.info("benchmarking %d queries", len(queries))
             results = []
-            for query in QUERIES:
+            for query in queries:
                 results.append(self.run_query(query, dataset_path, params))
                 if self.progress and task is not None:
                     self.progress.advance(task)
@@ -87,6 +90,12 @@ class BenchmarkRunner:
         finally:
             if self.progress:
                 self.progress.stop()
+
+    def dataset_columns(self, dataset_path: str) -> set[str]:
+        cursor = self.connection.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({sql_literal(dataset_path)}) LIMIT 0"
+        )
+        return {row[0] for row in cursor.fetchall()}
 
     def resolve_params(self, dataset_path: str) -> dict[str, object]:
         sql = PARAMS_SQL.format(parquet_glob=sql_literal(dataset_path))
@@ -173,3 +182,14 @@ def sql_literal(value: object) -> str:
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
     return str(value)
+
+
+def runnable_queries(
+    queries: list[Query], columns: set[str], params: dict[str, object]
+) -> list[Query]:
+    return [
+        query
+        for query in queries
+        if all(column in columns for column in query.required_columns)
+        and all(param in params for param in query.required_params)
+    ]
