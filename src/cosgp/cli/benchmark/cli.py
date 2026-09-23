@@ -14,7 +14,7 @@ from .compare import (
     write_csv,
     write_markdown,
 )
-from .queries import DEFAULT_REPEATS
+from .queries import DEFAULT_REPEATS, BenchmarkSuite
 
 benchmark_app = Typer(help="Benchmark datasets and compare the results.")
 
@@ -37,6 +37,10 @@ def run(
     repeats: Annotated[
         int, Option(help="Number of times to repeat each query for timing")
     ] = DEFAULT_REPEATS,
+    suite: Annotated[
+        BenchmarkSuite,
+        Option(help="Query suite: isolated core queries, composite searches, or all"),
+    ] = BenchmarkSuite.core,
     progress: Annotated[
         bool,
         Option(
@@ -55,7 +59,7 @@ def run(
     configure_logging(progress)
     out_dir.mkdir(parents=True, exist_ok=True)
     run_file = BenchmarkRunner(repeats=repeats, progress=progress).run(
-        name, path, out_dir
+        name, path, out_dir, suite
     )
     print(f"wrote {run_file}")
 

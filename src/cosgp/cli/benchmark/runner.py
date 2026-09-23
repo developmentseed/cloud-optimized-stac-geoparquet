@@ -12,7 +12,7 @@ import duckdb
 from rich.progress import Progress, TaskID
 
 from ...progress import progress_bar
-from .queries import DEFAULT_REPEATS, QUERIES, Query
+from .queries import DEFAULT_REPEATS, QUERIES, BenchmarkSuite, Query
 
 logger = logging.getLogger(__name__)
 
@@ -26,19 +26,25 @@ class BenchmarkResult:
     runs: tuple[float, ...]
 
 
-PARAMS_SQL = """
-SELECT
-    quantile_cont(datetime, 0.25) AS start_datetime,
-    quantile_cont(datetime, 0.75) AS end_datetime,
-    quantile_cont(bbox.xmin, 0.25) AS minx,
-    quantile_cont(bbox.xmax, 0.75) AS maxx,
-    quantile_cont(bbox.ymin, 0.25) AS miny,
-    quantile_cont(bbox.ymax, 0.75) AS maxy,
-    quantile_cont("eo:cloud_cover", 0.5) AS max_cloud_cover,
-    any_value(collection) AS collection,
-    any_value(id) AS id
-FROM read_parquet({parquet_glob})
-"""
+PARAM_EXPRESSIONS: dict[str, tuple[str, ...]] = {
+    "datetime": (
+        "quantile_cont(datetime, 0.25) AS start_datetime",
+        "quantile_cont(datetime, 0.75) AS end_datetime",
+    ),
+    "bbox": (
+        "quantile_cont(bbox.xmin, 0.25) AS minx",
+        "quantile_cont(bbox.xmax, 0.75) AS maxx",
+        "quantile_cont(bbox.ymin, 0.25) AS miny",
+        "quantile_cont(bbox.ymax, 0.75) AS maxy",
+    ),
+    "eo:cloud_cover": ('quantile_cont("eo:cloud_cover", 0.5) AS max_cloud_cover',),
+    "hash:hash": (
+        'quantile_cont("hash:hash", 0.25) AS min_hash',
+        'quantile_cont("hash:hash", 0.75) AS max_hash',
+    ),
+    "collection": ("any_value(collection) AS collection",),
+    "id": ("any_value(id) AS id",),
+}
 
 
 class BenchmarkRunner:
@@ -59,15 +65,25 @@ class BenchmarkRunner:
         )
         self.connection.execute("SET enable_external_file_cache = false")
 
-    def run(self, dataset_name: str, dataset_path: str, out_dir: Path) -> Path:
+    def run(
+        self,
+        dataset_name: str,
+        dataset_path: str,
+        out_dir: Path,
+        suite: BenchmarkSuite = BenchmarkSuite.core,
+    ) -> Path:
         if self.progress:
             self.progress.start()
         else:
             logger.info("resolving parameters for %s", dataset_path)
         try:
             columns = self.dataset_columns(dataset_path)
-            params = self.resolve_params(dataset_path)
-            queries = runnable_queries(QUERIES, columns, params)
+            params = self.resolve_params(dataset_path, columns)
+            selected = queries_for_suite(QUERIES, suite)
+            queries = runnable_queries(selected, columns, params)
+            skipped = skipped_queries(selected, columns, params)
+            for query, reason in skipped.items():
+                logger.info("skipping %s: %s", query, reason)
 
             task: TaskID | None = None
             if self.progress:
@@ -86,7 +102,9 @@ class BenchmarkRunner:
             if self.progress and task is not None:
                 self.progress.remove_task(task)
 
-            return self.write(dataset_name, dataset_path, params, results, out_dir)
+            return self.write(
+                dataset_name, dataset_path, suite, params, skipped, results, out_dir
+            )
         finally:
             if self.progress:
                 self.progress.stop()
@@ -97,20 +115,38 @@ class BenchmarkRunner:
         )
         return {row[0] for row in cursor.fetchall()}
 
-    def resolve_params(self, dataset_path: str) -> dict[str, object]:
-        sql = PARAMS_SQL.format(parquet_glob=sql_literal(dataset_path))
+    def resolve_params(self, dataset_path: str, columns: set[str]) -> dict[str, object]:
+        expressions = [
+            expression
+            for column, column_expressions in PARAM_EXPRESSIONS.items()
+            if column in columns
+            for expression in column_expressions
+        ]
+        if not expressions:
+            return {}
+        sql = (
+            "SELECT\n    "
+            + ",\n    ".join(expressions)
+            + "\nFROM read_parquet("
+            + sql_literal(dataset_path)
+            + ", hive_partitioning = false)"
+        )
         cursor = self.connection.execute(sql)
-        columns = [description[0] for description in cursor.description]
+        result_columns = [description[0] for description in cursor.description]
         row = cursor.fetchone()
         assert row is not None
-        params = dict(zip(columns, row))
-        params["aoi_wkt"] = (
-            f"POLYGON(({params['minx']} {params['miny']}, "
-            f"{params['maxx']} {params['miny']}, "
-            f"{params['maxx']} {params['maxy']}, "
-            f"{params['minx']} {params['maxy']}, "
-            f"{params['minx']} {params['miny']}))"
-        )
+        params = {
+            name: value for name, value in zip(result_columns, row) if value is not None
+        }
+        bbox_params = ("minx", "miny", "maxx", "maxy")
+        if all(name in params for name in bbox_params):
+            params["aoi_wkt"] = (
+                f"POLYGON(({params['minx']} {params['miny']}, "
+                f"{params['maxx']} {params['miny']}, "
+                f"{params['maxx']} {params['maxy']}, "
+                f"{params['minx']} {params['maxy']}, "
+                f"{params['minx']} {params['miny']}))"
+            )
         return params
 
     def run_query(
@@ -155,7 +191,9 @@ class BenchmarkRunner:
         self,
         dataset_name: str,
         dataset_path: str,
+        suite: BenchmarkSuite,
         params: dict[str, object],
+        skipped: dict[str, str],
         results: list[BenchmarkResult],
         out_dir: Path,
     ) -> Path:
@@ -168,7 +206,9 @@ class BenchmarkRunner:
             "timestamp": timestamp.isoformat(),
             "duckdb_version": duckdb.__version__,
             "repeats": self.repeats,
+            "suite": suite.value,
             "params": params,
+            "skipped": skipped,
             "results": [asdict(result) for result in results],
         }
         run_file = run_dir / "run.json"
@@ -193,3 +233,30 @@ def runnable_queries(
         if all(column in columns for column in query.required_columns)
         and all(param in params for param in query.required_params)
     ]
+
+
+def queries_for_suite(queries: list[Query], suite: BenchmarkSuite) -> list[Query]:
+    if suite is BenchmarkSuite.all:
+        return queries
+    return [query for query in queries if query.suite is suite]
+
+
+def skipped_queries(
+    queries: list[Query], columns: set[str], params: dict[str, object]
+) -> dict[str, str]:
+    skipped: dict[str, str] = {}
+    for query in queries:
+        missing_columns = [
+            column for column in query.required_columns if column not in columns
+        ]
+        missing_params = [
+            param for param in query.required_params if param not in params
+        ]
+        reasons = []
+        if missing_columns:
+            reasons.append("missing columns: " + ", ".join(missing_columns))
+        if missing_params:
+            reasons.append("missing parameters: " + ", ".join(missing_params))
+        if reasons:
+            skipped[query.name] = "; ".join(reasons)
+    return skipped
