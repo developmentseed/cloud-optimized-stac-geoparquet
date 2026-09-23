@@ -27,15 +27,6 @@ logger = logging.getLogger(__name__)
 
 BBox = tuple[float, float, float, float]
 
-TIMESTAMP = pyarrow.timestamp("us", tz="UTC")
-BBOX = pyarrow.struct(
-    [
-        pyarrow.field("minx", pyarrow.float64()),
-        pyarrow.field("miny", pyarrow.float64()),
-        pyarrow.field("maxx", pyarrow.float64()),
-        pyarrow.field("maxy", pyarrow.float64()),
-    ]
-)
 BUCKET = pyarrow.field("bucket", pyarrow.int32())
 DEFAULT_ROW_GROUP_SIZE = 150_000
 DEFAULT_BUCKET_SIZE = 2_000_000_000  # 2 GB of uncompressed data per output file
@@ -141,9 +132,7 @@ class Runner:
                     f"file-level metadata of {infile} does not match "
                     f"the metadata of {infiles[0]}"
                 )
-            schema = hashed_schema(
-                parquet_infile.schema_arrow, bbox is not None, file_metadata
-            )
+            schema = hashed_schema(parquet_infile.schema_arrow, file_metadata)
             outfile = hash_directory / infile.name
             outfiles.append(outfile)
             file_task: TaskID | None = None
@@ -157,14 +146,7 @@ class Runner:
                         row_group
                     ).total_byte_size
                     table = parquet_infile.read_row_group(row_group)
-                    table, table_hashes = hashed_table(
-                        table,
-                        hasher,
-                        start_datetime,
-                        end_datetime,
-                        bbox,
-                        self.prefix_id,
-                    )
+                    table, table_hashes = hashed_table(table, hasher, self.prefix_id)
                     hashes.extend(table_hashes)
                     writer.write_table(table)
                     if self.progress and file_task is not None:
@@ -296,20 +278,10 @@ def recompute_geo_bbox(
     return {**metadata, b"geo": json.dumps(geo).encode()}
 
 
-def hashed_schema(
-    schema: Schema, has_bbox: bool, metadata: dict[bytes, bytes] | None
-) -> Schema:
-    hash_columns = ["hash:hash", "hash:start_datetime", "hash:end_datetime"]
-    hash_fields = [
-        pyarrow.field("hash:hash", pyarrow.uint64()),
-        pyarrow.field("hash:start_datetime", TIMESTAMP),
-        pyarrow.field("hash:end_datetime", TIMESTAMP),
-    ]
-    if has_bbox:
-        hash_columns.append("hash:bbox")
-        hash_fields.append(pyarrow.field("hash:bbox", BBOX))
+def hashed_schema(schema: Schema, metadata: dict[bytes, bytes] | None) -> Schema:
+    hash_field = pyarrow.field("hash:hash", pyarrow.uint64())
     return pyarrow.schema(
-        [field for field in schema if field.name not in hash_columns] + hash_fields,
+        [field for field in schema if field.name != hash_field.name] + [hash_field],
         metadata=metadata,
     )
 
@@ -317,9 +289,6 @@ def hashed_schema(
 def hashed_table(
     table: Table,
     hasher: Hasher,
-    start_datetime: datetime.datetime,
-    end_datetime: datetime.datetime,
-    bbox: BBox | None,
     prefix_id: bool,
 ) -> tuple[Table, list[int]]:
     datetimes = table.select(["datetime"]).to_pandas()
@@ -352,30 +321,10 @@ def hashed_table(
             table.field("id"),
             pyarrow.array(prefixed_ids, pyarrow.string()),
         )
-    table = (
-        table.append_column(
-            pyarrow.field("hash:hash", pyarrow.uint64()),
-            pyarrow.array(hashes, pyarrow.uint64()),
-        )
-        .append_column(
-            pyarrow.field("hash:start_datetime", TIMESTAMP),
-            pyarrow.array(pyarrow.array([start_datetime] * table.num_rows), TIMESTAMP),
-        )
-        .append_column(
-            pyarrow.field("hash:end_datetime", TIMESTAMP),
-            pyarrow.array(pyarrow.array([end_datetime] * table.num_rows), TIMESTAMP),
-        )
+    table = table.append_column(
+        pyarrow.field("hash:hash", pyarrow.uint64()),
+        pyarrow.array(hashes, pyarrow.uint64()),
     )
-    if bbox is not None:
-        minx, miny, maxx, maxy = bbox
-        table = table.append_column(
-            pyarrow.field("hash:bbox", BBOX),
-            pyarrow.array(
-                [{"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}]
-                * table.num_rows,
-                BBOX,
-            ),
-        )
     return table, hashes
 
 
