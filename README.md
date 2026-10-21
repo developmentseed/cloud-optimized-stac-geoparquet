@@ -62,7 +62,7 @@ uv run cosgp benchmark run my-dataset "optimized/*.parquet" --suite all
 uv run cosgp benchmark compare benchmark-results/run-a-* benchmark-results/run-b-*
 ```
 
-`path` is passed straight to DuckDB's `read_parquet`, so it can be a local glob or a remote (e.g. `s3://`) URI. See [notebooks/duckdb-geoparquet-benchmarks.ipynb](notebooks/duckdb-geoparquet-benchmarks.ipynb) for a deeper cross-layout comparison against files retrieved from the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/).
+`path` is passed straight to DuckDB's `read_parquet`, so it can be a local glob or a remote (e.g. `s3://`) URI. See [notebooks/duckdb-geoparquet-benchmarks.ipynb](notebooks/duckdb-geoparquet-benchmarks.ipynb) for deeper cross-layout comparisons using Sentinel-2 L2A data from the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) and [Chris Holmes's STAC GeoParquet](https://source.coop/cholmes/stac-geoparquet-s2l2a) on Source Cooperative.
 
 The default `core` suite isolates one filter or ordering dimension per query. Use
 `--suite composite` for realistic searches that combine multiple predicates, or
