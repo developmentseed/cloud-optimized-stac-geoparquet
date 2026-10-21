@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+
+# Synchronize documentation with https://source.coop/developmentseed/stac-geoparquet.
+# This assumes you have an AWS profile configured for source.coop with the name `source-coop`.
+
+set -e
+
+aws s3 cp docs/source-coop/README.md s3://developmentseed/stac-geoparquet/README.md --profile source-coop
