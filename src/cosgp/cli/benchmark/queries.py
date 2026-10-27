@@ -142,6 +142,7 @@ WHERE collection = {collection}
         sql="""SELECT count(*)
 FROM read_parquet({parquet_glob}, hive_partitioning = false)
 WHERE "hash:hash" BETWEEN {min_hash} AND {max_hash}
+  AND collection = {collection}
   AND datetime >= {start_datetime}
   AND datetime < {end_datetime}
   AND bbox.xmax >= {minx}
@@ -149,10 +150,11 @@ WHERE "hash:hash" BETWEEN {min_hash} AND {max_hash}
   AND bbox.ymax >= {miny}
   AND bbox.ymin <= {maxy}
 """,
-        required_columns=("hash:hash", "datetime", "bbox"),
+        required_columns=("hash:hash", "collection", "datetime", "bbox"),
         required_params=(
             "min_hash",
             "max_hash",
+            "collection",
             "start_datetime",
             "end_datetime",
             "minx",
