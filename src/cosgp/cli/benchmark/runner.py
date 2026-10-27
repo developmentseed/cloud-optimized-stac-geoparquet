@@ -38,10 +38,6 @@ PARAM_EXPRESSIONS: dict[str, tuple[str, ...]] = {
         "quantile_cont(bbox.ymax, 0.75) AS maxy",
     ),
     "eo:cloud_cover": ('quantile_cont("eo:cloud_cover", 0.5) AS max_cloud_cover',),
-    "hash:hash": (
-        'quantile_cont("hash:hash", 0.25) AS min_hash',
-        'quantile_cont("hash:hash", 0.75) AS max_hash',
-    ),
     "collection": ("any_value(collection) AS collection",),
     "id": ("any_value(id) AS id",),
 }
@@ -147,7 +143,50 @@ class BenchmarkRunner:
                 f"{params['minx']} {params['maxy']}, "
                 f"{params['minx']} {params['miny']}))"
             )
+        hash_range_params = (
+            "start_datetime",
+            "end_datetime",
+            "minx",
+            "miny",
+            "maxx",
+            "maxy",
+        )
+        if "hash:hash" in columns and all(name in params for name in hash_range_params):
+            params.update(self.resolve_hash_range(dataset_path, columns, params))
         return params
+
+    def resolve_hash_range(
+        self,
+        dataset_path: str,
+        columns: set[str],
+        params: dict[str, object],
+    ) -> dict[str, int]:
+        """Returns conservative hash bounds for the exact benchmark search.
+
+        Parameter resolution is not timed, so this intentionally scans the exact
+        search results first. Taking their minimum and maximum hash may admit false
+        positives between the bounds, but cannot exclude a matching item.
+        """
+        predicates = [
+            f"datetime >= {sql_literal(params['start_datetime'])}",
+            f"datetime < {sql_literal(params['end_datetime'])}",
+            f"bbox.xmax >= {sql_literal(params['minx'])}",
+            f"bbox.xmin <= {sql_literal(params['maxx'])}",
+            f"bbox.ymax >= {sql_literal(params['miny'])}",
+            f"bbox.ymin <= {sql_literal(params['maxy'])}",
+        ]
+        if "collection" in columns and "collection" in params:
+            predicates.insert(0, f"collection = {sql_literal(params['collection'])}")
+        sql = f"""SELECT
+    min("hash:hash") AS min_hash,
+    max("hash:hash") AS max_hash
+FROM read_parquet({sql_literal(dataset_path)}, hive_partitioning = false)
+WHERE {" AND ".join(predicates)}
+"""
+        row = self.connection.execute(sql).fetchone()
+        if row is None or row[0] is None or row[1] is None:
+            return {}
+        return {"min_hash": int(row[0]), "max_hash": int(row[1])}
 
     def run_query(
         self, query: Query, dataset_path: str, params: dict[str, object]

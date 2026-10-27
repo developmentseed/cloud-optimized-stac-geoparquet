@@ -12,6 +12,7 @@ from cosgp.cli.benchmark.runner import (
     queries_for_suite,
     runnable_queries,
     skipped_queries,
+    sql_literal,
 )
 
 
@@ -94,3 +95,69 @@ def test_resolve_params_only_uses_available_columns(tmp_path: Path) -> None:
     assert "end_datetime" in params
     assert "collection" not in params
     assert "max_cloud_cover" not in params
+
+
+def test_hash_range_covers_exact_stac_matches(tmp_path: Path) -> None:
+    path = tmp_path / "hashed.parquet"
+    bbox_type = pyarrow.struct(
+        [
+            ("xmin", pyarrow.float64()),
+            ("ymin", pyarrow.float64()),
+            ("xmax", pyarrow.float64()),
+            ("ymax", pyarrow.float64()),
+        ]
+    )
+    table = pyarrow.table(
+        {
+            "id": ["match-low", "match-high", "other-collection", "outside"],
+            "collection": ["sentinel-2", "sentinel-2", "landsat", "sentinel-2"],
+            "datetime": pyarrow.array(
+                [
+                    dt.datetime(2024, 6, 1, tzinfo=dt.UTC),
+                    dt.datetime(2024, 6, 2, tzinfo=dt.UTC),
+                    dt.datetime(2024, 6, 2, tzinfo=dt.UTC),
+                    dt.datetime(2024, 6, 2, tzinfo=dt.UTC),
+                ],
+                type=pyarrow.timestamp("us", tz="UTC"),
+            ),
+            "bbox": pyarrow.array(
+                [
+                    {"xmin": 1.0, "ymin": 1.0, "xmax": 2.0, "ymax": 2.0},
+                    {"xmin": 3.0, "ymin": 3.0, "xmax": 4.0, "ymax": 4.0},
+                    {"xmin": 2.0, "ymin": 2.0, "xmax": 3.0, "ymax": 3.0},
+                    {"xmin": 20.0, "ymin": 20.0, "xmax": 21.0, "ymax": 21.0},
+                ],
+                type=bbox_type,
+            ),
+            "hash:hash": pyarrow.array([20, 90, 10, 50], type=pyarrow.uint64()),
+        }
+    )
+    pyarrow.parquet.write_table(table, path)
+    runner = object.__new__(BenchmarkRunner)
+    runner.connection = duckdb.connect(database=":memory:")
+    columns = set(table.column_names)
+    params: dict[str, object] = {
+        "collection": "sentinel-2",
+        "start_datetime": dt.datetime(2024, 6, 1, tzinfo=dt.UTC),
+        "end_datetime": dt.datetime(2024, 7, 1, tzinfo=dt.UTC),
+        "minx": 0.0,
+        "miny": 0.0,
+        "maxx": 10.0,
+        "maxy": 10.0,
+    }
+
+    hash_params = runner.resolve_hash_range(str(path), columns, params)
+
+    assert hash_params == {"min_hash": 20, "max_hash": 90}
+    params.update(hash_params)
+    counts = []
+    for name in ("composite_stac_search_count", "composite_hash_stac_search_count"):
+        query = next(query for query in QUERIES if query.name == name)
+        values = {"parquet_glob": str(path), **params}
+        sql = query.sql.format(
+            **{key: sql_literal(value) for key, value in values.items()}
+        )
+        row = runner.connection.execute(sql).fetchone()
+        assert row is not None
+        counts.append(row[0])
+    assert counts == [2, 2]
